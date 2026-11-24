@@ -1,10 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import '../data/tareas_repositorio.dart';
 import '../models/tarea.dart';
 
-// Pantalla base SIN persistencia ni operaciones CRUD implementadas.
-// Conserva las indicaciones TODO para orientar tu trabajo.
+// Pantalla principal. Lee y escribe las tareas solo a través del repositorio.
 class TareasPage extends StatefulWidget {
-  const TareasPage({super.key});
+  final TareasRepositorio repositorio;
+
+  const TareasPage({super.key, required this.repositorio});
 
   @override
   State<TareasPage> createState() => _TareasPageState();
@@ -14,15 +18,30 @@ class _TareasPageState extends State<TareasPage> {
   final TextEditingController _tituloController = TextEditingController();
 
   List<Tarea> _tareas = [];
+  StreamSubscription<List<Tarea>>? _suscripcion;
 
   @override
   void initState() {
     super.initState();
-
+    // La consulta se hace aquí y no en build(): el stream avisa cada cambio.
+    _suscripcion = widget.repositorio.observarTareas().listen(
+      (tareas) => setState(() => _tareas = tareas),
+      onError: (Object error) =>
+          _mostrarMensaje('No se pudieron cargar las tareas: $error'),
+    );
   }
 
-  void _agregarTarea() {
-    _pendiente('Implementar registro de tarea');
+  Future<void> _agregarTarea() async {
+    final titulo = _tituloController.text.trim();
+    if (titulo.isEmpty) {
+      return;
+    }
+    try {
+      await widget.repositorio.agregar(titulo);
+      _tituloController.clear();
+    } catch (error) {
+      _mostrarMensaje('No se pudo guardar la tarea: $error');
+    }
   }
 
   void _alternarCompletada(Tarea tarea, bool completada) {
@@ -38,6 +57,13 @@ class _TareasPageState extends State<TareasPage> {
   }
 
   void _pendiente(String mensaje) {
+    _mostrarMensaje(mensaje);
+  }
+
+  void _mostrarMensaje(String mensaje) {
+    if (!mounted) {
+      return;
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(mensaje)),
     );
@@ -45,6 +71,7 @@ class _TareasPageState extends State<TareasPage> {
 
   @override
   void dispose() {
+    _suscripcion?.cancel();
     _tituloController.dispose();
     super.dispose();
   }
