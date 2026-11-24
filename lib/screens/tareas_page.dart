@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+
 import '../data/tareas_repositorio.dart';
+import '../data/validacion.dart';
 import '../models/tarea.dart';
 
 // Pantalla principal. Lee y escribe las tareas solo a través del repositorio.
@@ -19,6 +21,7 @@ class _TareasPageState extends State<TareasPage> {
 
   List<Tarea> _tareas = [];
   StreamSubscription<List<Tarea>>? _suscripcion;
+  String? _errorTitulo;
 
   @override
   void initState() {
@@ -27,46 +30,104 @@ class _TareasPageState extends State<TareasPage> {
     _suscripcion = widget.repositorio.observarTareas().listen(
       (tareas) => setState(() => _tareas = tareas),
       onError: (Object error) =>
-          _mostrarMensaje('No se pudieron cargar las tareas: $error'),
+          _mostrarMensaje('No se pudieron cargar las tareas guardadas.'),
     );
   }
 
   Future<void> _agregarTarea() async {
-    final titulo = _tituloController.text.trim();
-    if (titulo.isEmpty) {
+    final error = validarTitulo(_tituloController.text);
+    setState(() => _errorTitulo = error);
+    if (error != null) {
       return;
     }
-    try {
-      await widget.repositorio.agregar(titulo);
+    final guardada = await _ejecutar(
+      () => widget.repositorio.agregar(_tituloController.text),
+      'No se pudo guardar la tarea.',
+    );
+    if (guardada) {
       _tituloController.clear();
-    } catch (error) {
-      _mostrarMensaje('No se pudo guardar la tarea: $error');
     }
   }
 
-  void _alternarCompletada(Tarea tarea, bool completada) {
-    _pendiente('Implementar actualización de tarea');
+  Future<void> _alternarCompletada(Tarea tarea, bool completada) async {
+    await _ejecutar(
+      () => widget.repositorio.cambiarEstado(tarea.id, completada),
+      'No se pudo actualizar el estado de la tarea.',
+    );
   }
 
-  void _editarTarea(Tarea tarea) {
-    _pendiente('Implementar edición de título');
+  Future<void> _editarTarea(Tarea tarea) async {
+    final nuevoTitulo = await showDialog<String>(
+      context: context,
+      builder: (context) => _DialogoEditarTitulo(tituloActual: tarea.titulo),
+    );
+    if (nuevoTitulo == null || nuevoTitulo.trim() == tarea.titulo) {
+      return;
+    }
+    await _ejecutar(
+      () => widget.repositorio.actualizarTitulo(tarea.id, nuevoTitulo),
+      'No se pudo cambiar el título.',
+    );
   }
 
-  void _eliminarTarea(Tarea tarea) {
-    _pendiente('Implementar eliminación de tarea');
+  Future<void> _eliminarTarea(Tarea tarea) async {
+    final confirmar = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Eliminar tarea'),
+        content: Text(
+          '¿Eliminar "${tarea.titulo}"? Esta acción no se puede deshacer.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmar != true) {
+      return;
+    }
+    await _ejecutar(
+      () => widget.repositorio.eliminar(tarea.id),
+      'No se pudo eliminar la tarea.',
+    );
   }
 
-  void _pendiente(String mensaje) {
-    _mostrarMensaje(mensaje);
+  /// Ejecuta una operación del repositorio y traduce los errores a mensajes
+  /// comprensibles. Devuelve true si se completó. La lista se actualiza sola
+  /// mediante el stream.
+  Future<bool> _ejecutar(
+    Future<Object?> Function() operacion,
+    String mensajeError,
+  ) async {
+    try {
+      final resultado = await operacion();
+      if (resultado == false) {
+        _mostrarMensaje('La tarea ya no existe.');
+        return false;
+      }
+      return true;
+    } on TituloInvalidoException catch (e) {
+      setState(() => _errorTitulo = e.mensaje);
+    } catch (error) {
+      debugPrint('Error de almacenamiento: $error');
+      _mostrarMensaje('$mensajeError Intenta de nuevo.');
+    }
+    return false;
   }
 
   void _mostrarMensaje(String mensaje) {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(mensaje)),
-    );
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(mensaje)));
   }
 
   @override
@@ -87,9 +148,18 @@ class _TareasPageState extends State<TareasPage> {
           children: [
             TextField(
               controller: _tituloController,
-              decoration: const InputDecoration(
+              maxLength: maxLongitudTitulo,
+              onChanged: (_) {
+                if (_errorTitulo != null) {
+                  setState(() => _errorTitulo = null);
+                }
+              },
+              onSubmitted: (_) => _agregarTarea(),
+              decoration: InputDecoration(
                 labelText: 'Nueva tarea',
-                border: OutlineInputBorder(),
+                border: const OutlineInputBorder(),
+                errorText: _errorTitulo,
+                errorMaxLines: 2,
               ),
             ),
             const SizedBox(height: 8),
@@ -118,8 +188,18 @@ class _TareasPageState extends State<TareasPage> {
                                 }
                               },
                             ),
-                            title: Text(tarea.titulo),
-                            subtitle: Text('ID: ${tarea.id}'),
+                            title: Text(
+                              tarea.titulo,
+                              style: tarea.completada
+                                  ? const TextStyle(
+                                      decoration: TextDecoration.lineThrough,
+                                    )
+                                  : null,
+                            ),
+                            subtitle: Text(
+                              'ID: ${tarea.id} - '
+                              '${tarea.completada ? 'Completada' : 'Pendiente'}',
+                            ),
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
@@ -143,6 +223,64 @@ class _TareasPageState extends State<TareasPage> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Diálogo para cambiar el título. Valida antes de cerrar y devuelve el texto.
+class _DialogoEditarTitulo extends StatefulWidget {
+  final String tituloActual;
+
+  const _DialogoEditarTitulo({required this.tituloActual});
+
+  @override
+  State<_DialogoEditarTitulo> createState() => _DialogoEditarTituloState();
+}
+
+class _DialogoEditarTituloState extends State<_DialogoEditarTitulo> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.tituloActual,
+  );
+  String? _error;
+
+  void _guardar() {
+    final error = validarTitulo(_controller.text);
+    if (error != null) {
+      setState(() => _error = error);
+      return;
+    }
+    Navigator.pop(context, _controller.text.trim());
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Editar título'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        maxLength: maxLongitudTitulo,
+        onSubmitted: (_) => _guardar(),
+        decoration: InputDecoration(
+          labelText: 'Título',
+          border: const OutlineInputBorder(),
+          errorText: _error,
+          errorMaxLines: 2,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(onPressed: _guardar, child: const Text('Guardar')),
+      ],
     );
   }
 }
