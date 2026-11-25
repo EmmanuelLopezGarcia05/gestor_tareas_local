@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
+import 'package:path_provider/path_provider.dart';
 
 part 'base_datos.g.dart';
 
@@ -15,16 +16,23 @@ class Tareas extends Table {
 class BaseDatos extends _$BaseDatos {
   /// Sin argumento abre la base persistente de la plataforma actual.
   /// Las pruebas pueden pasar otra conexión, por ejemplo una en memoria.
-  BaseDatos([QueryExecutor? conexion]) : super(conexion ?? _abrirConexion());
+  BaseDatos([QueryExecutor? conexion]) : super(conexion ?? abrirConexion());
 
   @override
   int get schemaVersion => 1;
 
-  static QueryExecutor _abrirConexion() {
-    // En nativo crea gestor_tareas.sqlite en el directorio de documentos de la
-    // app. En web usa SQLite en WebAssembly; los dos archivos están en web/.
+  /// Abre la base persistente llamada [nombre].
+  ///
+  /// En nativo crea el archivo [nombre].sqlite en el directorio de soporte de
+  /// la app y no en Documentos, que el usuario puede borrar o sincronizar con
+  /// la nube. En web usa SQLite compilado a WebAssembly; sqlite3.wasm y
+  /// drift_worker.js están en web/.
+  static QueryExecutor abrirConexion({String nombre = 'gestor_tareas'}) {
     return driftDatabase(
-      name: 'gestor_tareas',
+      name: nombre,
+      native: const DriftNativeOptions(
+        databaseDirectory: getApplicationSupportDirectory,
+      ),
       web: DriftWebOptions(
         sqlite3Wasm: Uri.parse('sqlite3.wasm'),
         driftWorker: Uri.parse('drift_worker.js'),

@@ -21,30 +21,53 @@ class _TareasPageState extends State<TareasPage> {
 
   List<Tarea> _tareas = [];
   StreamSubscription<List<Tarea>>? _suscripcion;
+  Timer? _avisoCarga;
+  bool _cargando = true;
   String? _errorTitulo;
 
   @override
   void initState() {
     super.initState();
+    // Si la base no llega a abrirse, se avisa en lugar de dejar la pantalla
+    // esperando sin explicación.
+    _avisoCarga = Timer(const Duration(seconds: 10), () {
+      _mostrarMensaje(
+        'La base de datos local no responde. Revisa que el navegador o el '
+        'dispositivo permitan guardar datos y vuelve a abrir la aplicación.',
+      );
+    });
     // La consulta se hace aquí y no en build(): el stream avisa cada cambio.
     _suscripcion = widget.repositorio.observarTareas().listen(
-      (tareas) => setState(() => _tareas = tareas),
-      onError: (Object error) =>
-          _mostrarMensaje('No se pudieron cargar las tareas guardadas.'),
+      (tareas) {
+        _avisoCarga?.cancel();
+        setState(() {
+          _tareas = tareas;
+          _cargando = false;
+        });
+      },
+      onError: (Object error) {
+        _avisoCarga?.cancel();
+        debugPrint('Error de almacenamiento: $error');
+        setState(() => _cargando = false);
+        _mostrarMensaje('No se pudieron cargar las tareas guardadas.');
+      },
     );
   }
 
   Future<void> _agregarTarea() async {
-    final error = validarTitulo(_tituloController.text);
+    final titulo = _tituloController.text;
+    final error = validarTitulo(titulo);
     setState(() => _errorTitulo = error);
     if (error != null) {
       return;
     }
     final guardada = await _ejecutar(
-      () => widget.repositorio.agregar(_tituloController.text),
+      () => widget.repositorio.agregar(titulo),
       'No se pudo guardar la tarea.',
     );
-    if (guardada) {
+    // El stream puede mostrar la tarea antes de que termine el guardado; si el
+    // usuario ya escribió otro título en ese tiempo, no se le borra.
+    if (guardada && _tituloController.text == titulo) {
       _tituloController.clear();
     }
   }
@@ -132,6 +155,7 @@ class _TareasPageState extends State<TareasPage> {
 
   @override
   void dispose() {
+    _avisoCarga?.cancel();
     _suscripcion?.cancel();
     _tituloController.dispose();
     super.dispose();
@@ -154,7 +178,11 @@ class _TareasPageState extends State<TareasPage> {
                   setState(() => _errorTitulo = null);
                 }
               },
-              onSubmitted: (_) => _agregarTarea(),
+              onSubmitted: (_) {
+                if (!_cargando) {
+                  _agregarTarea();
+                }
+              },
               decoration: InputDecoration(
                 labelText: 'Nueva tarea',
                 border: const OutlineInputBorder(),
@@ -164,7 +192,7 @@ class _TareasPageState extends State<TareasPage> {
             ),
             const SizedBox(height: 8),
             FilledButton.icon(
-              onPressed: _agregarTarea,
+              onPressed: _cargando ? null : _agregarTarea,
               icon: const Icon(Icons.add),
               label: const Text('Agregar tarea'),
             ),
@@ -172,7 +200,9 @@ class _TareasPageState extends State<TareasPage> {
             const Text('Mis tareas', style: TextStyle(fontSize: 18)),
             const SizedBox(height: 8),
             Expanded(
-              child: _tareas.isEmpty
+              child: _cargando
+                  ? const Center(child: CircularProgressIndicator())
+                  : _tareas.isEmpty
                   ? const Center(child: Text('Todavía no hay tareas guardadas'))
                   : ListView.builder(
                       itemCount: _tareas.length,

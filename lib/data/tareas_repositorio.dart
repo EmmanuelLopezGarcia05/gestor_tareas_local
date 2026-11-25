@@ -28,7 +28,7 @@ class TareasRepositorio {
 
   /// Inserta una tarea pendiente y devuelve su id.
   /// Lanza [TituloInvalidoException] si el título no es válido.
-  Future<int> agregar(String titulo) {
+  Future<int> agregar(String titulo) async {
     final limpio = _validar(titulo);
     return _db.into(_db.tareas).insert(TareasCompanion.insert(titulo: limpio));
   }
